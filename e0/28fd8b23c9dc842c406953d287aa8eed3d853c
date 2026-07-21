@@ -1,0 +1,25 @@
+CHANGELOG.md
+  s_c53b05c01e321f::t_db1685b13cdb4a 6-8
+pkg/shim/shim.go
+  s_c53b05c01e321f::t_e5d1cea7a2ca5e 369-374,380,382-385,388,394
+pkg/shim/shim_test.go
+  s_c53b05c01e321f::t_304ad7d9cc1e48 38-39,52,55
+plugin/driver_test.go
+  s_c53b05c01e321f::t_c2cb13503f9c7e 446-447,461-463
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e028fd8b23c9dc842c406953d287aa8eed3d853c",
+  "prompts": {},
+  "sessions": {
+    "s_c53b05c01e321f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0801faa44ffecXwecSVCvgXIZR",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Nick Rhodes <nrhodes91@gmail.com>"
+    }
+  }
+}
