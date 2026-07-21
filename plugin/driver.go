@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/nomad-driver-exec2/pkg/util"
 	"github.com/hashicorp/nomad/client/lib/cpustats"
 	cstructs "github.com/hashicorp/nomad/client/structs"
+	caps "github.com/hashicorp/nomad/drivers/shared/capabilities"
 	"github.com/hashicorp/nomad/drivers/shared/eventer"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/plugins/base"
@@ -165,6 +166,17 @@ func (p *Plugin) doFingerprint(find lookupFunc) *drivers.Fingerprint {
 		return failure(drivers.HealthStateUnhealthy, "failed to find unshare executable")
 	case uPath == "":
 		return failure(drivers.HealthStateUndetected, "unshare executable does not exist")
+	}
+
+	// inspect setpriv binary (used to drop privileges and grant capabilities)
+	sPath, sErr := find("setpriv")
+	switch {
+	case os.IsNotExist(sErr):
+		return failure(drivers.HealthStateUndetected, "setpriv executable not found")
+	case sErr != nil:
+		return failure(drivers.HealthStateUnhealthy, "failed to find setpriv executable")
+	case sPath == "":
+		return failure(drivers.HealthStateUndetected, "setpriv executable does not exist")
 	}
 
 	// create our fingerprint
@@ -547,11 +559,61 @@ func (p *Plugin) setOptions(driverTaskConfig *drivers.TaskConfig) (*shim.Options
 		unveil = append(unveil, taskConfig.Unveil...)
 	}
 
+	// validate the capabilities the task requested via cap_add against the set
+	// of capabilities the operator has allowed via the plugin allow_caps config
+	capAdd, err := capsForTask(p.config.AllowCaps, taskConfig.CapAdd)
+	if err != nil {
+		return nil, err
+	}
+
 	return &shim.Options{
 		Command:        taskConfig.Command,
 		Arguments:      taskConfig.Args,
 		UnveilPaths:    unveil,
 		UnveilDefaults: p.config.UnveilDefaults,
 		OOMScoreAdj:    taskConfig.OOMScoreAdj,
+		CapAdd:         capAdd,
 	}, nil
+}
+
+// capsForTask validates the capabilities a task requested via cap_add against
+// the capabilities the operator permits via the plugin allow_caps config. On
+// success it returns the resulting capabilities normalized to lower-case
+// without the "CAP_" prefix (the form expected by setpriv). By default exec2
+// tasks run with no capabilities; a capability must be listed in allow_caps
+// before a task may request it via cap_add.
+//
+// It rejects names the running kernel does not recognize as capabilities, so a
+// typo fails here with a clear error rather than at exec time when setpriv
+// rejects the argument.
+func capsForTask(allowCaps, capAdd []string) ([]string, error) {
+	supported := caps.Supported()
+
+	allowed := caps.New(allowCaps)
+	// s.Difference(b) returns the elements of b not in s, so this yields the
+	// allow_caps names the kernel does not recognize.
+	if unknown := supported.Difference(allowed); !unknown.Empty() {
+		return nil, fmt.Errorf(
+			"driver allow_caps lists unknown capabilities: %s",
+			unknown,
+		)
+	}
+
+	requested := caps.New(capAdd)
+	if unknown := supported.Difference(requested); !unknown.Empty() {
+		return nil, fmt.Errorf(
+			"task cap_add lists unknown capabilities: %s",
+			unknown,
+		)
+	}
+
+	// yields the requested caps not present in allow_caps
+	if missing := allowed.Difference(requested); !missing.Empty() {
+		return nil, fmt.Errorf(
+			"task requested capabilities not allowed by driver allow_caps: %s",
+			missing,
+		)
+	}
+
+	return requested.Slice(false), nil
 }

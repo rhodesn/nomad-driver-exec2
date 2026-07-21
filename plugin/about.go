@@ -52,6 +52,7 @@ var driverConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
 		hclspec.NewLiteral("false"),
 	),
 	"unveil_paths": hclspec.NewAttr("unveil_paths", "list(string)", false),
+	"allow_caps":   hclspec.NewAttr("allow_caps", "list(string)", false),
 })
 
 // taskConfigSpec is the HCL configuration set for the task on the jobspec
@@ -60,6 +61,7 @@ var taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
 	"args":          hclspec.NewAttr("args", "list(string)", false),
 	"unveil":        hclspec.NewAttr("unveil", "list(string)", false),
 	"oom_score_adj": hclspec.NewAttr("oom_score_adj", "number", false),
+	"cap_add":       hclspec.NewAttr("cap_add", "list(string)", false),
 })
 
 var capabilities = &drivers.Capabilities{
@@ -82,6 +84,7 @@ type Config struct {
 	UnveilDefaults bool     `codec:"unveil_defaults"`
 	UnveilPaths    []string `codec:"unveil_paths"`
 	UnveilByTask   bool     `codec:"unveil_by_task"`
+	AllowCaps      []string `codec:"allow_caps"`
 }
 
 // TaskConfig represents the exec2 driver task configuration that gets set in
@@ -91,4 +94,5 @@ type TaskConfig struct {
 	Args        []string `codec:"args"`
 	Unveil      []string `codec:"unveil"`
 	OOMScoreAdj int      `codec:"oom_score_adj"`
+	CapAdd      []string `codec:"cap_add"`
 }

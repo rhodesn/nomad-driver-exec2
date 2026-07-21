@@ -12,7 +12,7 @@ ordinary file system permissions.
 - Linux 5.15+
 - Cgroups v2 enabled
 - Landlock LSM enabled
-- Commands `unshare` and `nsenter`
+- Commands `unshare`, `nsenter`, and `setpriv`
 - Nomad client running as root
 
 Recent mainstream Linux distributions such as Ubuntu 22.04 and Fedora 36 meet
@@ -161,6 +161,7 @@ plugin "nomad-driver-exec2" {
     unveil_defaults = true
     unveil_paths    = []
     unveil_by_task  = false
+    allow_caps      = []
   }
 }
 ```
@@ -178,6 +179,17 @@ plugin "nomad-driver-exec2" {
   - `unveil_by_task` - (default: `false`) - enable or disable job submitters to
   specify additional filesystem path access within task config
 
+  - `allow_caps` - (default: `[]`) - a list of Linux capabilities to allow tasks
+  to request via `cap_add` in task config. By default no capabilities are
+  permitted, and `exec2` tasks run with an empty capability set. Capability
+  names may be given in upper or lower case, with or without the `CAP_` prefix.
+  The special value `all` permits every capability supported by the operating
+  system.
+
+  ```hcl
+  allow_caps = ["net_bind_service", "sys_time"]
+  ```
+
 #### Task Configuration
 
 ##### config
@@ -193,6 +205,7 @@ config {
   args          = ["/etc/os-release"]
   unveil        = ["r:/etc/os-release"]
   oom_score_adj = 500
+  cap_add       = ["net_bind_service"]
 }
 ```
 
@@ -208,6 +221,16 @@ config {
 
   - `oom_score_adj` - (optional) - The likelihood of the task being OOM killed,
   must be a positive integer. Defaults to `0`.
+
+  - `cap_add` - (optional) - A list of Linux capabilities to grant to the task
+  process, in addition to the empty default set. Each requested capability must
+  also be listed in the plugin's `allow_caps` configuration, otherwise the task
+  will fail to start. Capability names may be given in upper or lower case, with
+  or without the `CAP_` prefix.
+
+  ```hcl
+  cap_add = ["net_bind_service"]
+  ```
 
 ##### cpu
 

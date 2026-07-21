@@ -32,6 +32,7 @@ type Options struct {
 	UnveilPaths    []string
 	UnveilDefaults bool
 	OOMScoreAdj    int
+	CapAdd         []string // linux capabilities to grant (setpriv form: lower-case, no "CAP_" prefix)
 }
 
 // Environment represents runtime configuration.
@@ -318,6 +319,17 @@ func self() string {
 	return executable
 }
 
+// capSpec renders a list of capabilities (in setpriv form: lower-case, no
+// "CAP_" prefix) into the "+cap1,+cap2" argument used by setpriv's --inh-caps
+// and --ambient-caps flags.
+func capSpec(caps []string) string {
+	parts := make([]string, len(caps))
+	for i, c := range caps {
+		parts[i] = "+" + c
+	}
+	return strings.Join(parts, ",")
+}
+
 func (e *exe) parameters(uid, gid int) []string {
 	var result []string
 
@@ -333,6 +345,10 @@ func (e *exe) parameters(uid, gid int) []string {
 	}
 
 	// setup unshare for ipc, pid namespaces
+	//
+	// The uid/gid switch is NOT done here (via --setuid/--setgid). setpriv
+	// below does it, so granted capabilities survive the switch and the final
+	// execve.
 	result = append(result,
 		"unshare",
 		"--ipc",
@@ -340,10 +356,42 @@ func (e *exe) parameters(uid, gid int) []string {
 		"--mount-proc",
 		"--fork",
 		"--kill-child=SIGKILL",
-		fmt.Sprintf("--setuid=%d", uid),
-		fmt.Sprintf("--setgid=%d", gid),
 		"--",
 	)
+
+	// setup setpriv to drop from root to the unprivileged task uid/gid and to
+	// grant any capabilities the task requested via cap_add. setpriv sets
+	// PR_SET_KEEPCAPS before the uid switch so the permitted capabilities
+	// survive, and raises the ambient set so the granted capabilities persist
+	// across the final execve into the user command. With no cap_add this is an
+	// unprivileged uid/gid switch, matching the previous unshare
+	// --setuid/--setgid behavior.
+	//
+	// --no-new-privs and a restricted bounding set block re-escalation. The
+	// bounding set drops to only the granted capabilities (empty by default),
+	// and no_new_privs stops a task from exec'ing a setuid-root or
+	// file-capability binary to gain capabilities the operator did not grant.
+	// setpriv applies both regardless of cap_add.
+	result = append(result,
+		"setpriv",
+		fmt.Sprintf("--reuid=%d", uid),
+		fmt.Sprintf("--regid=%d", gid),
+		"--clear-groups",
+		"--no-new-privs",
+	)
+	// restrict the bounding set to the granted capabilities; "-all" drops
+	// everything, then setpriv keeps the granted caps (already present in the
+	// root agent's bounding set, so setpriv only drops, it never adds).
+	bounding := "-all"
+	if len(e.opts.CapAdd) > 0 {
+		spec := capSpec(e.opts.CapAdd)
+		bounding = "-all," + spec
+		result = append(result,
+			"--inh-caps="+spec,
+			"--ambient-caps="+spec,
+		)
+	}
+	result = append(result, "--bounding-set="+bounding, "--")
 
 	// setup ourself '$0 exec2-shim' for unveil
 	result = append(result, self(), SubCommand)

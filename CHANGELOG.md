@@ -1,5 +1,7 @@
 ## UNRELEASED
 
+IMPROVEMENTS:
+* Add `allow_caps` plugin config and `cap_add` task config to grant Linux capabilities to tasks. [GH-79](https://github.com/hashicorp/nomad-driver-exec2/issues/79)
 
 ## 0.1.2 (May 12, 2026)
 

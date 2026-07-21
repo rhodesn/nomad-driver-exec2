@@ -154,15 +154,21 @@ func TestFunctional_cases(t *testing.T) {
 		args    []string
 		unveil  []string
 
+		capAdd []string
+
 		// plugin config
 		unveilDefaults bool
 		unveilByTask   bool
 		unveilPaths    []string
+		allowCaps      []string
 
 		// expectations
 		exp      *drivers.ExitResult
 		stdoutRe *regexp.Regexp
 		stderrRe *regexp.Regexp
+		// startErrRe, when set, asserts that StartTask fails with a matching
+		// error (and no task is expected to run)
+		startErrRe *regexp.Regexp
 	}{
 		// run 'env' with default unveil paths
 		{
@@ -427,6 +433,47 @@ func TestFunctional_cases(t *testing.T) {
 			exp:            &drivers.ExitResult{ExitCode: 0},
 			stdoutRe:       regexp.MustCompile(`\w+/tmp/tmp\.\w+`),
 		},
+		// capabilities: by default an unprivileged task has an empty ambient
+		// capability set
+		{
+			name:           "no capabilities by default",
+			user:           "nomad-83000",
+			command:        "cat",
+			args:           []string{"/proc/self/status"},
+			unveilDefaults: true,
+			unveilPaths:    []string{"r:/proc"},
+			exp:            &drivers.ExitResult{ExitCode: 0},
+			// empty bounding + ambient sets, and no_new_privs set
+			stdoutRe: regexp.MustCompile(`(?s)CapBnd:\s+0000000000000000.*CapAmb:\s+0000000000000000.*NoNewPrivs:\s+1`),
+		},
+		// capabilities: a task may be granted an allowed capability via cap_add;
+		// it appears in the ambient set (net_bind_service is cap #10 => 0x400)
+		{
+			name:           "cap_add net_bind_service granted",
+			user:           "nomad-84000",
+			command:        "cat",
+			args:           []string{"/proc/self/status"},
+			unveilDefaults: true,
+			unveilPaths:    []string{"r:/proc"},
+			allowCaps:      []string{"net_bind_service"},
+			capAdd:         []string{"net_bind_service"},
+			exp:            &drivers.ExitResult{ExitCode: 0},
+			// bounding set restricted to the granted cap, ambient set holds it,
+			// and no_new_privs is set (net_bind_service is cap #10 => 0x400)
+			stdoutRe: regexp.MustCompile(`(?s)CapBnd:\s+0000000000000400.*CapAmb:\s+0000000000000400.*NoNewPrivs:\s+1`),
+		},
+		// capabilities: requesting a capability not present in allow_caps must
+		// cause StartTask to fail
+		{
+			name:           "cap_add rejected when not allowed",
+			user:           "nomad-85000",
+			command:        "cat",
+			args:           []string{"/proc/self/status"},
+			unveilDefaults: true,
+			capAdd:         []string{"sys_time"},
+			allowCaps:      []string{"net_bind_service"},
+			startErrRe:     regexp.MustCompile(`task requested capabilities not allowed by driver allow_caps: sys_time`),
+		},
 	}
 
 	for _, tc := range cases {
@@ -435,12 +482,14 @@ func TestFunctional_cases(t *testing.T) {
 				UnveilDefaults: tc.unveilDefaults,
 				UnveilByTask:   tc.unveilByTask,
 				UnveilPaths:    tc.unveilPaths,
+				AllowCaps:      tc.allowCaps,
 			}
 
 			taskConfig := &TaskConfig{
 				Command: tc.command,
 				Args:    tc.args,
 				Unveil:  tc.unveil,
+				CapAdd:  tc.capAdd,
 			}
 
 			allocID := uuid.Generate()
@@ -463,6 +512,11 @@ func TestFunctional_cases(t *testing.T) {
 
 			// Start the task
 			_, _, err := harness.StartTask(task)
+			if tc.startErrRe != nil {
+				must.Error(t, err)
+				must.RegexMatch(t, tc.startErrRe, err.Error())
+				return
+			}
 			must.NoError(t, err)
 
 			defer func() { _ = harness.DestroyTask(task.ID, true) }()
@@ -552,6 +606,73 @@ func Test_doFingerprint_notRoot(t *testing.T) {
 	must.Eq(t, drivers.DriverRequiresRootMessage, fp.HealthDescription)
 }
 
+func Test_capsForTask(t *testing.T) {
+	ci.Parallel(t)
+
+	cases := []struct {
+		name      string
+		allowCaps []string
+		capAdd    []string
+		exp       []string
+		expErr    string
+	}{
+		{
+			name:      "none allowed none requested",
+			allowCaps: nil,
+			capAdd:    nil,
+			exp:       []string{},
+		},
+		{
+			name:      "requested subset of allowed",
+			allowCaps: []string{"net_bind_service", "sys_time"},
+			capAdd:    []string{"net_bind_service"},
+			exp:       []string{"net_bind_service"},
+		},
+		{
+			name:      "normalizes case and prefix",
+			allowCaps: []string{"CAP_NET_BIND_SERVICE"},
+			capAdd:    []string{"cap_net_bind_service"},
+			exp:       []string{"net_bind_service"},
+		},
+		{
+			name:      "all expands to allowed set",
+			allowCaps: []string{"all"},
+			capAdd:    []string{"chown"},
+			exp:       []string{"chown"},
+		},
+		{
+			name:      "requested not allowed",
+			allowCaps: []string{"net_bind_service"},
+			capAdd:    []string{"sys_time"},
+			expErr:    "task requested capabilities not allowed by driver allow_caps: sys_time",
+		},
+		{
+			name:      "unknown capability in allow_caps",
+			allowCaps: []string{"net_bind_service", "not_a_cap"},
+			capAdd:    nil,
+			expErr:    "driver allow_caps lists unknown capabilities: not_a_cap",
+		},
+		{
+			name:      "unknown capability in cap_add",
+			allowCaps: []string{"net_bind_service"},
+			capAdd:    []string{"bogus_cap"},
+			expErr:    "task cap_add lists unknown capabilities: bogus_cap",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := capsForTask(tc.allowCaps, tc.capAdd)
+			if tc.expErr != "" {
+				must.EqError(t, err, tc.expErr)
+				return
+			}
+			must.NoError(t, err)
+			must.Eq(t, tc.exp, result)
+		})
+	}
+}
+
 func Test_doFingerprint_missing_nsenter(t *testing.T) {
 	ctests.RequireRoot(t)
 
@@ -586,6 +707,23 @@ func Test_doFingerprint_missing_unshare(t *testing.T) {
 	must.Eq(t, "unshare executable not found", fp.HealthDescription)
 }
 
+func Test_doFingerprint_missing_setpriv(t *testing.T) {
+	ctests.RequireRoot(t)
+
+	setprivLookupFailure := func(name string) (string, error) {
+		if name == "setpriv" {
+			return "", os.ErrNotExist
+		}
+		return filepath.Join("/bin", name), nil
+	}
+
+	p := new(Plugin)
+	fp := p.doFingerprint(setprivLookupFailure)
+
+	must.Eq(t, drivers.HealthStateUndetected, fp.Health)
+	must.Eq(t, "setpriv executable not found", fp.HealthDescription)
+}
+
 func Test_tools(t *testing.T) {
 	t.Run("unshare", func(t *testing.T) {
 		path, err := exec.LookPath("unshare")
@@ -597,5 +735,11 @@ func Test_tools(t *testing.T) {
 		path, err := exec.LookPath("nsenter")
 		must.NoError(t, err)
 		t.Log("path to nsenter is: " + path)
+	})
+
+	t.Run("setpriv", func(t *testing.T) {
+		path, err := exec.LookPath("setpriv")
+		must.NoError(t, err)
+		t.Log("path to setpriv is: " + path)
 	})
 }
