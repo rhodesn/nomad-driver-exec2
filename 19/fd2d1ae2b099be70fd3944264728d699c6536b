@@ -1,0 +1,21 @@
+plugin/driver.go
+  s_c53b05c01e321f::t_0bdb5bb7c2b53c 23,171-181,562-568,575,578-598
+go.mod
+  s_c53b05c01e321f::t_f187b27279b77d 116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "19fd2d1ae2b099be70fd3944264728d699c6536b",
+  "prompts": {},
+  "sessions": {
+    "s_c53b05c01e321f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0801faa44ffecXwecSVCvgXIZR",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Nick Rhodes <nrhodes91@gmail.com>"
+    }
+  }
+}
