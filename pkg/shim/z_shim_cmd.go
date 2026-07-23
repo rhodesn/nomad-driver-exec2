@@ -102,8 +102,17 @@ func init() {
 
 		var code = 0
 		if err = cmd.Run(); err != nil {
-			ee := err.(*exec.ExitError)
-			code = ee.ExitCode()
+			if ee, ok := err.(*exec.ExitError); ok {
+				code = ee.ExitCode()
+			} else {
+				// cmd.Run failed before/without the task process actually
+				// running to completion (e.g. execve denied by landlock,
+				// binary not found/executable, fork failure, etc). Surface
+				// the real error to the task's stderr log instead of
+				// panicking on the failed type assertion.
+				debug("failed to run task command %q: %v", cmdpath, err)
+				code = subproc.ExitNotRunnable
+			}
 		}
 
 		_ = stdout.Close()
