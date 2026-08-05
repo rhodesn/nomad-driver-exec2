@@ -1,0 +1,33 @@
+plugin/driver_test.go
+  s_7c0d6742146f28::t_2e0ea7d53f9c07 21,158-159,164,170-172,449-508,517,524,547-551,647-744,779-795,808-813
+plugin/driver.go
+  s_7c0d6742146f28::t_47a7be5de8c139 23,171-181,562-568,575,578-619
+README.md
+  s_7c0d6742146f28::t_f675ecfd49820d 15,164,182-192,208,225-240
+go.mod
+  s_7c0d6742146f28::t_6903e35fa7b4df 116
+CHANGELOG.md
+  s_7c0d6742146f28::t_bace11af55f636 3-4
+plugin/about.go
+  s_7c0d6742146f28::t_cecb0b397f8cdb 55,64,87,97
+pkg/shim/shim_test.go
+  s_7c0d6742146f28::t_cf64a23c95ad0d 1-112
+pkg/shim/shim.go
+  s_7c0d6742146f28::t_4b2ba982f671e3 35,331-341,357-360,371-419
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "535ad00cab44ee3b070f49ecb8e9aaf0d6c10f21",
+  "prompts": {},
+  "sessions": {
+    "s_7c0d6742146f28": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_02e0a45ebffevhrnNHz6vtnGEy",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Nick Rhodes <nrhodes91@gmail.com>"
+    }
+  }
+}
