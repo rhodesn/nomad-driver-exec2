@@ -1,0 +1,42 @@
+plugin/about.go
+  s_c53b05c01e321f::t_6661a78daa66a4 55,64,87,97
+plugin/driver.go
+  s_c53b05c01e321f::t_0bdb5bb7c2b53c 23,171-181,562-568,575,578-619
+README.md
+  s_c53b05c01e321f::t_b301b753c4a728 15,164,182-192,208,225-234
+pkg/shim/shim.go
+  s_c53b05c01e321f::t_6110b184579db5 35,331-341,371-374,399-402,404
+  s_c53b05c01e321f::t_cd379df7f6ada0 378-382,403
+  s_c53b05c01e321f::t_32502e724c9a9a 375-377
+  s_c53b05c01e321f::t_a4211bd36d93ab 358-360
+  s_c53b05c01e321f::t_7d0b9a6b016d03 395-396,398
+  s_c53b05c01e321f::t_e5d1cea7a2ca5e 357,383-394,397
+CHANGELOG.md
+  s_c53b05c01e321f::t_93a60418f0f7b2 3-4
+go.mod
+  s_c53b05c01e321f::t_f187b27279b77d 116
+pkg/shim/shim_test.go
+  s_c53b05c01e321f::t_bdb3990a0b46d2 1-37,41-51,54,56-73
+  s_c53b05c01e321f::t_304ad7d9cc1e48 40,52-53,55
+  s_c53b05c01e321f::t_e7d37ac2f61f7d 38-39
+plugin/driver_test.go
+  s_c53b05c01e321f::t_c40d19d81d15df 458-459,473-475
+  s_c53b05c01e321f::t_c2cb13503f9c7e 460-472,476
+  s_c53b05c01e321f::t_b221e0b3d6792c 157-158,163,169-171,448-457,477-488,497,504,527-531,627-693,728-744,757-762
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "07ab745c489af107087129706919eeb6afff8f31",
+  "prompts": {},
+  "sessions": {
+    "s_c53b05c01e321f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0801faa44ffecXwecSVCvgXIZR",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Nick Rhodes <nrhodes91@gmail.com>"
+    }
+  }
+}
