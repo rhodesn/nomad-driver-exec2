@@ -1,0 +1,23 @@
+CHANGELOG.md
+  s_120489ccbe0617::t_03bfb3118ab7be 4-6
+pkg/shim/shim.go
+  s_120489ccbe0617::t_90beb0114b4894 140-149,372-375,378-397,405
+plugin/driver_test.go
+  s_120489ccbe0617::t_72a2fe05035483 288-299,506,516-520,524,527,530,532-534,541
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "edcb5504cdded39fef5cb17fc31f653e2bb24a6c",
+  "prompts": {},
+  "sessions": {
+    "s_120489ccbe0617": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_02eacc3e0ffe7CqBwZ9yODAgPy",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Nick Rhodes <nrhodes91@gmail.com>"
+    }
+  }
+}
