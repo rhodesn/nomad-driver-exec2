@@ -4,10 +4,8 @@
 package shim
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +16,7 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-set/v2"
+	"github.com/hashicorp/nomad-driver-exec2/pkg/cgroup"
 	"github.com/hashicorp/nomad-driver-exec2/pkg/resources"
 	"github.com/hashicorp/nomad-driver-exec2/pkg/resources/process"
 	"github.com/hashicorp/nomad/helper/users/dynamic"
@@ -27,13 +26,13 @@ import (
 
 // Options represent Task configuration options.
 type Options struct {
-	Command        string
-	Arguments      []string
-	UnveilPaths    []string
-	OOMScoreAdj    int
-	Capabilities   []string
-	WorkDir        string  // working directory for the task; defaults to TaskDir
-	Mounts         []Mount // bind mounts to set up inside the task mount namespace
+	Command      string
+	Arguments    []string
+	UnveilPaths  []string
+	OOMScoreAdj  int
+	Capabilities []string
+	WorkDir      string  // working directory for the task; defaults to TaskDir
+	Mounts       []Mount // bind mounts to set up inside the task mount namespace
 }
 
 // Mount describes a single bind mount to establish inside the task's private mount namespace before the task command is executed.
@@ -95,6 +94,7 @@ func New(env *Environment, opts *Options, l hclog.Logger) ExecTwo {
 	return &exe{
 		env:    env,
 		opts:   opts,
+		cgroup: cgroup.New(env.Cgroup),
 		cpu:    new(resources.TrackCPU),
 		logger: l,
 	}
@@ -106,6 +106,7 @@ func Recover(pid int, env *Environment, l hclog.Logger) ExecTwo {
 		pid:     pid,
 		env:     env,
 		opts:    nil, // already started, not used now
+		cgroup:  cgroup.New(env.Cgroup),
 		waiter:  process.WaitPID(pid, env.TaskDir).Wait(),
 		signals: process.Signals(pid),
 		cpu:     new(resources.TrackCPU),
@@ -115,8 +116,9 @@ func Recover(pid int, env *Environment, l hclog.Logger) ExecTwo {
 
 type exe struct {
 	// comes from task config
-	env  *Environment
-	opts *Options
+	env    *Environment
+	opts   *Options
+	cgroup cgroup.Group
 
 	// comes from runtime
 	pid     int
@@ -140,7 +142,7 @@ func (e *exe) Start(ctx context.Context) error {
 	}
 
 	// find out cgroup file descriptor
-	fd, cleanup, err := e.openCG()
+	fd, cleanup, err := e.cgroup.Open()
 	if err != nil {
 		return fmt.Errorf("failed to open cgroup for descriptor: %w", err)
 	}
@@ -149,7 +151,11 @@ func (e *exe) Start(ctx context.Context) error {
 	defer cleanup()
 
 	// set resource constraints
-	if err = e.constrain(); err != nil {
+	if err = e.cgroup.Configure(cgroup.Limits{
+		CPUQuota:  e.env.CPUBandwidth,
+		Memory:    e.env.Memory,
+		MemoryMax: e.env.MemoryMax,
+	}); err != nil {
 		return fmt.Errorf("failed to write cgroup constraints: %w", err)
 	}
 
@@ -257,36 +263,29 @@ func (e *exe) Signal(s string) error {
 func (e *exe) Stop(signal string, timeout time.Duration) error {
 	// politely ask the group to terminate via user specified signal
 	err := e.Signal(signal)
-	if e.blockPIDs(timeout) {
+	if e.blockPIDs(e.cgroup, timeout) {
 		// no more mr. nice guy, kill the whole cgroup
-		_ = e.writeCG("cgroup.kill", "1")
+		_ = e.cgroup.Kill()
 	}
 	return err
 }
 
 func (e *exe) Stats() *resources.Utilization {
-	memCurrentS, _ := e.readCG("memory.current")
-	memCurrent, _ := strconv.Atoi(memCurrentS)
-
-	swapCurrentS, _ := e.readCG("memory.swap.current")
-	swapCurrent, _ := strconv.Atoi(swapCurrentS)
-
-	memStatS, _ := e.readCG("memory.stat")
-	memCache, memRSS := extractMemStat(memStatS)
-
-	cpuStatsS, _ := e.readCG("cpu.stat")
-	usr, system, total := extractCPU(cpuStatsS)
-	userPct, systemPct, totalPct := e.cpu.Percent(usr, system, total)
+	stats, err := e.cgroup.Stats()
+	if err != nil {
+		e.logger.Debug("failed to read cgroup stats", "error", err)
+	}
+	userPct, systemPct, totalPct := e.cpu.Percent(stats.CPU.User, stats.CPU.System, stats.CPU.Total)
 
 	specs := resources.GetSpecs()
 	ticks := (.01 * totalPct) * resources.Percent(int(specs.Ticks())/specs.Cores)
 
 	return &resources.Utilization{
 		// memory stats
-		Memory: uint64(memCurrent),
-		Swap:   uint64(swapCurrent),
-		Cache:  memCache,
-		RSS:    memRSS,
+		Memory: stats.Memory.Current,
+		Swap:   stats.Memory.Swap,
+		Cache:  stats.Memory.Cache,
+		RSS:    stats.Memory.RSS,
 
 		// cpu stats
 		System:  systemPct,
@@ -294,31 +293,6 @@ func (e *exe) Stats() *resources.Utilization {
 		Percent: totalPct,
 		Ticks:   ticks,
 	}
-}
-
-func (e *exe) openCG() (int, func(), error) {
-	fd, err := unix.Open(e.env.Cgroup, unix.O_PATH, 0)
-	cleanup := func() { _ = unix.Close(fd) }
-	return fd, cleanup, err
-}
-
-func (e *exe) readCG(file string) (string, error) {
-	file = filepath.Join(e.env.Cgroup, file)
-	b, err := os.ReadFile(file)
-	return strings.TrimSpace(string(b)), err
-}
-
-func (e *exe) writeCG(file, content string) error {
-	file = filepath.Join(e.env.Cgroup, file)
-	f, err := os.OpenFile(file, os.O_WRONLY, 0o700)
-	if err != nil {
-		return fmt.Errorf("failed to open cgroup file: %w", err)
-	}
-	if _, err = io.Copy(f, strings.NewReader(content)); err != nil {
-		return fmt.Errorf("failed to write pid to cgroup file: %w", err)
-	}
-
-	return f.Close()
 }
 
 func flatten(user, home, workDir string, env map[string]string) []string {
@@ -398,7 +372,7 @@ func (e *exe) shimConfig(uid, gid int) *ShimConfig {
 		UnveilPaths:  e.opts.UnveilPaths,
 		Command:      e.opts.Command,
 		Arguments:    e.opts.Arguments,
-		Mounts:       e.opts.Mounts, 
+		Mounts:       e.opts.Mounts,
 	}
 }
 
@@ -482,30 +456,6 @@ func (e *exe) prepare(ctx context.Context, home string, fd int, configPath strin
 	return cmd, nil
 }
 
-// set resource constraints via cgroups
-func (e *exe) constrain() error {
-	// set cpu bandwidth
-	if err := e.writeCG("cpu.max", fmt.Sprintf("%d 100000", e.env.CPUBandwidth)); err != nil {
-		return err
-	}
-
-	// set memory limits
-	switch e.env.MemoryMax {
-	case 0:
-		if err := e.writeCG("memory.max", fmt.Sprintf("%d", e.env.Memory)); err != nil {
-			return err
-		}
-	default:
-		if err := e.writeCG("memory.low", fmt.Sprintf("%d", e.env.Memory)); err != nil {
-			return err
-		}
-		if err := e.writeCG("memory.max", fmt.Sprintf("%d", e.env.MemoryMax)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (e *exe) setOomScoreAdj(pid int) error {
 	return os.WriteFile(
 		fmt.Sprintf("/proc/%d/oom_score_adj", pid),
@@ -514,52 +464,9 @@ func (e *exe) setOomScoreAdj(pid int) error {
 	)
 }
 
-func extractMemStat(s string) (cache, rss uint64) {
-	read := func(line string) uint64 {
-		num := line[strings.Index(line, " ")+1:]
-		v, _ := strconv.ParseUint(num, 10, 64)
-		return v
-	}
-	scanner := bufio.NewScanner(strings.NewReader(s))
-	for scanner.Scan() {
-		text := scanner.Text()
-		switch {
-		case strings.HasPrefix(text, "file "):
-			cache = read(text)
-		case strings.HasPrefix(text, "anon "):
-			rss = read(text)
-		}
-		if cache != 0 && rss != 0 {
-			break // both found, stop scanning
-		}
-	}
-	return
-}
-
-func extractCPU(s string) (user, system, total resources.MicroSecond) {
-	read := func(line string, i *resources.MicroSecond) {
-		num := line[strings.Index(line, " ")+1:]
-		v, _ := strconv.ParseInt(num, 10, 64)
-		*i = resources.MicroSecond(v)
-	}
-	scanner := bufio.NewScanner(strings.NewReader(s))
-	for scanner.Scan() {
-		text := scanner.Text()
-		switch {
-		case strings.HasPrefix(text, "user_usec"):
-			read(text, &user)
-		case strings.HasPrefix(text, "system_usec"):
-			read(text, &system)
-		case strings.HasPrefix(text, "usage_usec"):
-			read(text, &total)
-		}
-	}
-	return
-}
-
 // blockPIDs blocks until there are no more live processes in the cgroup, and returns true
 // if the timeout is exceeded or an error occurs.
-func (e *exe) blockPIDs(timeout time.Duration) bool {
+func (e *exe) blockPIDs(group cgroup.Group, timeout time.Duration) bool {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -568,14 +475,14 @@ func (e *exe) blockPIDs(timeout time.Duration) bool {
 	for {
 		select {
 		case <-ticker.C:
-			count := e.currentPIDs()
-			switch count {
-			case 0:
-				// processes are no longer running
-				return false
-			case -1:
+			count, err := group.CurrentPIDs()
+			switch {
+			case err != nil:
 				// failed to read cgroups file, issue force kill
 				return true
+			case count == 0:
+				// processes are no longer running
+				return false
 			default:
 				// processes are still running, wait longer
 			}
@@ -584,20 +491,4 @@ func (e *exe) blockPIDs(timeout time.Duration) bool {
 			return true
 		}
 	}
-}
-
-// currentPIDs returns the number of live processes in the cgroup.
-func (e *exe) currentPIDs() int {
-	s, err := e.readCG("pids.current")
-	if err != nil {
-		return -1
-	}
-	if s == "" {
-		return 0
-	}
-	i, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return i
 }
