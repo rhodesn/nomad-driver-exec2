@@ -1,0 +1,19 @@
+pkg/shim/shim.go
+  s_4c6ce244b8f034::t_08e6f4bb644606 19,29-35,97,109,119-121,145,154-158,266,268,274-275,282-285,372,466,475-477,480-482
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6c97bf8c57030d5d5898e8aa2a77d5e6796a6fb6",
+  "prompts": {},
+  "sessions": {
+    "s_4c6ce244b8f034": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e6371ce91ffend5ihmutr0f3PA",
+        "model": "unknown"
+      },
+      "human_author": "Nick Rhodes <nrhodes91@gmail.com>"
+    }
+  }
+}
