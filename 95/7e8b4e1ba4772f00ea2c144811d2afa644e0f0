@@ -1,0 +1,21 @@
+plugin/driver.go
+  s_747a30e02ac9e0::t_961d2b01bd93b8 389,403
+plugin/driver_lifecycle_test.go
+  s_747a30e02ac9e0::t_dcc138b219c836 1-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "957e8b4e1ba4772f00ea2c144811d2afa644e0f0",
+  "prompts": {},
+  "sessions": {
+    "s_747a30e02ac9e0": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_eba154ecfffex4yMXpkOj86gf1",
+        "model": "unknown"
+      },
+      "human_author": "Nick Rhodes <nrhodes91@gmail.com>"
+    }
+  }
+}
