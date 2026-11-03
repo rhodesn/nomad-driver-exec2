@@ -1,0 +1,19 @@
+pkg/shim/z_shim_cmd.go
+  s_27da5b0d2e1bd2::t_b9b18a0d41d88a 63-65,151,207,211,216-217,222-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "18d0969c64ca02a32511e5a3262afd4748941231",
+  "prompts": {},
+  "sessions": {
+    "s_27da5b0d2e1bd2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e6384a890ffeAfcGjBUGQnJtG7",
+        "model": "unknown"
+      },
+      "human_author": "Nick Rhodes <nrhodes91@gmail.com>"
+    }
+  }
+}
