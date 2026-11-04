@@ -27,13 +27,13 @@ import (
 
 // Options represent Task configuration options.
 type Options struct {
-	Command        string
-	Arguments      []string
-	UnveilPaths    []string
-	OOMScoreAdj    int
-	Capabilities   []string
-	WorkDir        string  // working directory for the task; defaults to TaskDir
-	Mounts         []Mount // bind mounts to set up inside the task mount namespace
+	Command      string
+	Arguments    []string
+	UnveilPaths  []string
+	OOMScoreAdj  int
+	Capabilities []string
+	WorkDir      string  // working directory for the task; defaults to TaskDir
+	Mounts       []Mount // bind mounts to set up inside the task mount namespace
 }
 
 // Mount describes a single bind mount to establish inside the task's private mount namespace before the task command is executed.
@@ -106,7 +106,7 @@ func Recover(pid int, env *Environment, l hclog.Logger) ExecTwo {
 		pid:     pid,
 		env:     env,
 		opts:    nil, // already started, not used now
-		waiter:  process.WaitPID(pid, env.TaskDir).Wait(),
+		waiter:  process.WaitPID(pid, env.TaskDir, env.Cgroup).Wait(),
 		signals: process.Signals(pid),
 		cpu:     new(resources.TrackCPU),
 		logger:  l,
@@ -162,6 +162,12 @@ func (e *exe) Start(ctx context.Context) error {
 	configPath, err := e.shimConfig(uid, gid).write(e.env.TaskDir)
 	if err != nil {
 		return fmt.Errorf("failed to write shim config: %w", err)
+	}
+
+	// A previous run in this allocation can leave a stale exit status file.
+	// Remove it so recovery does not report this live run as exited.
+	if err = process.ClearExitStatus(e.env.TaskDir); err != nil {
+		return fmt.Errorf("failed to clear stale exit status: %w", err)
 	}
 
 	// create sandbox using nsenter, unshare, and our cgroup
@@ -398,7 +404,7 @@ func (e *exe) shimConfig(uid, gid int) *ShimConfig {
 		UnveilPaths:  e.opts.UnveilPaths,
 		Command:      e.opts.Command,
 		Arguments:    e.opts.Arguments,
-		Mounts:       e.opts.Mounts, 
+		Mounts:       e.opts.Mounts,
 	}
 }
 

@@ -5,9 +5,11 @@ package process
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/hashicorp/nomad/plugins/drivers"
@@ -79,13 +81,25 @@ const (
 	exitStatusFile = ".exit_status.txt"
 )
 
+// ClearExitStatus removes the exit status file from a previous task run.
+// The task's local/ directory survives in-place restarts inside an allocation.
+// Clear the file before a new run starts. A missing file is not an error.
+func ClearExitStatus(taskdir string) error {
+	path := filepath.Join(taskdir, "local", exitStatusFile)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // WaitPID is able to wait on a given specific PID. We must lookup the
 // process and also send a signal(0) to make sure it is actually still alive
 // before waiting on it.
-func WaitPID(pid int, taskdir string) Waiter {
+func WaitPID(pid int, taskdir string, cgroup string) Waiter {
 	return &pidWaiter{
 		pid:     pid,
 		taskdir: taskdir,
+		cgroup:  cgroup,
 		ch:      make(chan *drivers.ExitResult),
 	}
 }
@@ -93,6 +107,7 @@ func WaitPID(pid int, taskdir string) Waiter {
 type pidWaiter struct {
 	pid     int
 	taskdir string
+	cgroup  string
 	ch      chan *drivers.ExitResult
 }
 
@@ -125,7 +140,19 @@ func (w *pidWaiter) wait(ch chan<- *drivers.ExitResult) {
 	// our task process
 	pidFD, pidErr := openProcessFD(w.pid)
 	if pidErr != nil {
-		ch <- finished(source, "task process file descriptor cannot be opened")
+		if errors.Is(pidErr, unix.ESRCH) {
+			// For a dead task, the status file is the only source for the exit code.
+			// Only runs started before this fix can leave a file from an earlier run.
+			// New runs clear the file before startup; a shim that dies without writing leaves no file.
+			// Accept the file as a best effort instead of reporting a clean exit as an error.
+			ch <- finished(source, "task process file descriptor cannot be opened")
+			return
+		}
+		// The process may still be alive; do not trust a file that may be stale.
+		ch <- &drivers.ExitResult{
+			ExitCode: -1,
+			Err:      pidErr,
+		}
 		return
 	}
 	defer func() { _ = unix.Close(int(pidFD)) }()
@@ -136,24 +163,70 @@ func (w *pidWaiter) wait(ch chan<- *drivers.ExitResult) {
 	}}
 	const timeout = -1 // infinite
 
-	// while we are holding the pidfd to *a* process of the same PID as the
-	// process we launched before client restart, check again if the
-	// .exit_status.txt file exists - which would indicate we're holding onto
-	// the pidfd of a process we do not know or care about
+	// A different process can reuse the task's PID after a client restart.
+	// In that case, the exit status file contains our task's exit code.
+	// A previous task run can also leave a stale file in the same allocation.
+	// Trust the file only when the PID is confirmed to be outside the task's cgroup.
 	code, codeErr := getExitStatus(source)
-	if codeErr == nil && code >= 0 {
+	if codeErr == nil && code >= 0 && pidReused(w.pid, w.cgroup) {
 		ch <- &drivers.ExitResult{
 			ExitCode: code,
 		}
 		return
 	}
 
-	// no need to check for an error
-	_, _ = unix.Poll(pollFD, timeout)
+	// EINTR means a signal interrupted the wait, not that the process exited.
+	for {
+		n, err := unix.Poll(pollFD, timeout)
+		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			ch <- &drivers.ExitResult{
+				ExitCode: -1,
+				Err:      err,
+			}
+			return
+		}
+		if n == 0 {
+			continue // no timeout is set; be defensive
+		}
+		if pollFD[0].Revents&unix.POLLIN != 0 {
+			break // the process has terminated
+		}
+		ch <- &drivers.ExitResult{
+			ExitCode: -1,
+			Err:      fmt.Errorf("unexpected pidfd poll events: %#x", pollFD[0].Revents),
+		}
+		return
+	}
 
 	// the process has terminated; we should be able to read the
 	// .exit_status.txt file the shim will have left behind for us
 	ch <- finished(source, "task process complete but status is missing")
+}
+
+// Nomad names task cgroups <alloc-id>.<task-name>.scope; assume each leaf is unique on the node.
+// Unknown membership returns false to avoid reporting a live task as exited.
+func pidReused(pid int, cgroup string) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return false
+	}
+	return pidReusedFrom(string(b), cgroup)
+}
+
+func pidReusedFrom(procCgroup, cgroup string) bool {
+	want := filepath.Base(cgroup)
+	if cgroup == "" || want == "." || want == "/" {
+		return false
+	}
+	path, ok := strings.CutPrefix(strings.TrimSuffix(procCgroup, "\n"), "0::")
+	if !ok || strings.ContainsAny(path, "\r\n") {
+		return false
+	}
+	got := filepath.Base(path)
+	return got != "." && got != "/" && got != want
 }
 
 func getExitStatus(path string) (int, error) {
@@ -174,9 +247,8 @@ func getExitStatus(path string) (int, error) {
 // Good discussion about better native support in Go for this in
 // https://github.com/golang/go/issues/62654
 func openProcessFD(pid int) (int32, error) {
-	const syscallNumber = 434 // sys_pidfd_open
-	fd, _, err := syscall.Syscall(syscallNumber, uintptr(pid), uintptr(0), 0)
-	if err != 0 {
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
 		return 0, err
 	}
 	return int32(fd), nil
