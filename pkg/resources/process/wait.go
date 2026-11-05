@@ -174,9 +174,8 @@ func getExitStatus(path string) (int, error) {
 // Good discussion about better native support in Go for this in
 // https://github.com/golang/go/issues/62654
 func openProcessFD(pid int) (int32, error) {
-	const syscallNumber = 434 // sys_pidfd_open
-	fd, _, err := syscall.Syscall(syscallNumber, uintptr(pid), uintptr(0), 0)
-	if err != 0 {
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
 		return 0, err
 	}
 	return int32(fd), nil
