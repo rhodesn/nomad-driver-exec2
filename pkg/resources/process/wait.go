@@ -5,9 +5,11 @@ package process
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/hashicorp/nomad/plugins/drivers"
@@ -82,10 +84,11 @@ const (
 // WaitPID is able to wait on a given specific PID. We must lookup the
 // process and also send a signal(0) to make sure it is actually still alive
 // before waiting on it.
-func WaitPID(pid int, taskdir string) Waiter {
+func WaitPID(pid int, taskdir string, cgroup string) Waiter {
 	return &pidWaiter{
 		pid:     pid,
 		taskdir: taskdir,
+		cgroup:  cgroup,
 		ch:      make(chan *drivers.ExitResult),
 	}
 }
@@ -93,6 +96,7 @@ func WaitPID(pid int, taskdir string) Waiter {
 type pidWaiter struct {
 	pid     int
 	taskdir string
+	cgroup  string
 	ch      chan *drivers.ExitResult
 }
 
@@ -136,12 +140,12 @@ func (w *pidWaiter) wait(ch chan<- *drivers.ExitResult) {
 	}}
 	const timeout = -1 // infinite
 
-	// while we are holding the pidfd to *a* process of the same PID as the
-	// process we launched before client restart, check again if the
-	// .exit_status.txt file exists - which would indicate we're holding onto
-	// the pidfd of a process we do not know or care about
+	// A different process can reuse the task's PID after a client restart.
+	// In that case, the exit status file contains our task's exit code.
+	// A previous task run can also leave a stale file in the same allocation.
+	// Trust the file only when the PID is confirmed to be outside the task's cgroup.
 	code, codeErr := getExitStatus(source)
-	if codeErr == nil && code >= 0 {
+	if codeErr == nil && code >= 0 && pidReused(w.pid, w.cgroup) {
 		ch <- &drivers.ExitResult{
 			ExitCode: code,
 		}
@@ -154,6 +158,29 @@ func (w *pidWaiter) wait(ch chan<- *drivers.ExitResult) {
 	// the process has terminated; we should be able to read the
 	// .exit_status.txt file the shim will have left behind for us
 	ch <- finished(source, "task process complete but status is missing")
+}
+
+// Nomad names task cgroups <alloc-id>.<task-name>.scope; assume each leaf is unique on the node.
+// Unknown membership returns false to avoid reporting a live task as exited.
+func pidReused(pid int, cgroup string) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return false
+	}
+	return pidReusedFrom(string(b), cgroup)
+}
+
+func pidReusedFrom(procCgroup, cgroup string) bool {
+	want := filepath.Base(cgroup)
+	if cgroup == "" || want == "." || want == "/" {
+		return false
+	}
+	path, ok := strings.CutPrefix(strings.TrimSuffix(procCgroup, "\n"), "0::")
+	if !ok || strings.ContainsAny(path, "\r\n") {
+		return false
+	}
+	got := filepath.Base(path)
+	return got != "." && got != "/" && got != want
 }
 
 func getExitStatus(path string) (int, error) {
