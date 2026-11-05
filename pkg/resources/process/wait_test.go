@@ -52,7 +52,7 @@ func TestPID_Wait_already_exited(t *testing.T) {
 	must.Eq(t, 7, result.ExitCode)
 }
 
-func TestPID_Wait_poll(t *testing.T) {
+func TestPIDWaitPoll(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -80,4 +80,24 @@ func TestPID_Wait_poll(t *testing.T) {
 	must.Greater(t, 100*time.Millisecond, time.Since(start))
 	must.NoError(t, result.Err)
 	must.Eq(t, 7, result.ExitCode)
+}
+
+func TestPIDWaitOpenFailure(t *testing.T) {
+	taskDir := writeStatus(t, 7, 0)
+
+	t.Run("gone", func(t *testing.T) {
+		// above the kernel's PID limit, so the process cannot exist
+		waitCh := WaitPID(4194304, taskDir).Wait()
+		result := <-waitCh
+		must.NoError(t, result.Err)
+		must.Eq(t, 7, result.ExitCode)
+	})
+
+	t.Run("cannot open", func(t *testing.T) {
+		// pidfd_open(0) fails with EINVAL; the file must not be trusted
+		waitCh := WaitPID(0, taskDir).Wait()
+		result := <-waitCh
+		must.NotNil(t, result.Err)
+		must.Eq(t, -1, result.ExitCode)
+	})
 }

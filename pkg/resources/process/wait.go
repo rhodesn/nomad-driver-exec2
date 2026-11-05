@@ -5,6 +5,7 @@ package process
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -125,7 +126,19 @@ func (w *pidWaiter) wait(ch chan<- *drivers.ExitResult) {
 	// our task process
 	pidFD, pidErr := openProcessFD(w.pid)
 	if pidErr != nil {
-		ch <- finished(source, "task process file descriptor cannot be opened")
+		if errors.Is(pidErr, unix.ESRCH) {
+			// For a dead task, the status file is the only source for the exit code.
+			// Only runs started before this fix can leave a file from an earlier run.
+			// New runs clear the file before startup; a shim that dies without writing leaves no file.
+			// Accept the file as a best effort instead of reporting a clean exit as an error.
+			ch <- finished(source, "task process file descriptor cannot be opened")
+			return
+		}
+		// The process may still be alive; do not trust a file that may be stale.
+		ch <- &drivers.ExitResult{
+			ExitCode: -1,
+			Err:      pidErr,
+		}
 		return
 	}
 	defer func() { _ = unix.Close(int(pidFD)) }()
@@ -148,8 +161,31 @@ func (w *pidWaiter) wait(ch chan<- *drivers.ExitResult) {
 		return
 	}
 
-	// no need to check for an error
-	_, _ = unix.Poll(pollFD, timeout)
+	// EINTR means a signal interrupted the wait, not that the process exited.
+	for {
+		n, err := unix.Poll(pollFD, timeout)
+		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			ch <- &drivers.ExitResult{
+				ExitCode: -1,
+				Err:      err,
+			}
+			return
+		}
+		if n == 0 {
+			continue // no timeout is set; be defensive
+		}
+		if pollFD[0].Revents&unix.POLLIN != 0 {
+			break // the process has terminated
+		}
+		ch <- &drivers.ExitResult{
+			ExitCode: -1,
+			Err:      fmt.Errorf("unexpected pidfd poll events: %#x", pollFD[0].Revents),
+		}
+		return
+	}
 
 	// the process has terminated; we should be able to read the
 	// .exit_status.txt file the shim will have left behind for us
